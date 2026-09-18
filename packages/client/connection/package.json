@@ -39,6 +39,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-credentials": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:~",
+    "bigtangle-ts": "link:../../../../wallet/packages/bigtangle-ts",
     "zod": "4.4.3"
   },
   "files": [

@@ -53,6 +53,10 @@ allowBuilds:
   electron-winstaller: false
   # Store-index rewriting only needs msgpackr's portable JavaScript codec.
   msgpackr-extract: false
+  # bigtangle-ts pulls secp256k1, whose install script builds a native addon;
+  # the package falls back to its bundled JS implementation, which is what the
+  # DID-token verifier uses, so we deny the native build.
+  secp256k1: false
 
 minimumReleaseAgeExclude:
   # Office engines and their API are qualified and released together by the kit repository.

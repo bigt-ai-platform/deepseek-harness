@@ -13,7 +13,7 @@ import { clientRequestSchema } from './rpc-schema.ts'
 import { bridge } from './http-bridge.ts'
 import { isRemoteAuthority, isTrustedApiRequest } from './api-request-trust.ts'
 import { API_PATH } from './api-path.ts'
-import type { BrowserAuth } from './browser-auth.ts'
+import type { ConnectionAuthenticator } from './browser-auth.ts'
 import { Peer } from './peer.ts'
 import type {
   PeerAdmission,
@@ -87,7 +87,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
-    private readonly browserAuth: BrowserAuth,
+    private readonly browserAuth: ConnectionAuthenticator,
   ) {
     super(ctx, 'connection')
     this.owner = ctx

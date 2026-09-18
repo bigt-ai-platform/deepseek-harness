@@ -11,6 +11,7 @@ import { CONNECT_PATH } from './connect-protocol.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority } from './api-request-trust.ts'
 import { BrowserAuth } from './browser-auth.ts'
+import { DidTokenAuthenticator } from './dai-token.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { ConnectionRecoveryConfigSchema, resolveConnectionConfig, type ConnectionRecoveryConfig } from './recovery-config.ts'
 
@@ -107,6 +108,12 @@ export interface ConnectionConfig {
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /** Request authenticator: browser launch-token cookie (default) or a dai DID token. */
+  authenticator?: 'browser' | 'dai'
+  /** Audience the DID token must carry when `authenticator` is `dai`. Default: `dsh`. */
+  daiAudience?: string
+  /** Pin the DID authenticator to one principal; a token from any other DID is refused. */
+  daiOwnerDid?: string
 }
 
 export const Config: z<ConnectionConfig> = z.object({
@@ -114,6 +121,9 @@ export const Config: z<ConnectionConfig> = z.object({
   trustedHosts: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  authenticator: z.union(['browser', 'dai']).default('browser'),
+  daiAudience: z.string().default('dsh'),
+  daiOwnerDid: z.string().default(''),
 })
 
 /**
@@ -133,11 +143,13 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
-  const connection = new HostConnectionService(
-    ctx,
-    trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
-  )
+  const authenticator = config?.authenticator === 'dai'
+    ? new DidTokenAuthenticator({
+      audience: config.daiAudience ?? 'dsh',
+      ...((config.daiOwnerDid ?? '') !== '' ? { ownerDid: config.daiOwnerDid } : {}),
+    })
+    : await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays)
+  const connection = new HostConnectionService(ctx, trustedHosts, authenticator)
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
     webCtx.on('webserver/index-inject', (table) => {
