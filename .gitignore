@@ -47,3 +47,7 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 native/system/test/bin/
+
+# Wallet dep staged for the image build (see Dockerfile): the dai branch links
+# bigtangle-ts from the sibling wallet checkout, outside this repo.
+/bigtangle-ts/

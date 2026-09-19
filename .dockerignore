@@ -1,0 +1,19 @@
+# Build outputs are regenerated inside the image; never send local ones.
+node_modules
+**/node_modules
+**/lib
+**/dist
+.pnpm-store
+coverage
+# Local-only secrets, logs, and editor/OS noise.
+.env
+*.log
+npm-debug.log*
+.DS_Store
+# NOTE: .git is intentionally NOT ignored — scripts/client-build-environment.ts
+# stamps the build from `git rev-parse HEAD`, so the build fails without it.
+# Staged wallet dep for the dai branch's bigtangle-ts link (Dockerfile places
+# it at /app/bigtangle-ts): keep its built dist; its deps install in the image.
+!bigtangle-ts
+!bigtangle-ts/dist
+!bigtangle-ts/dist/**
