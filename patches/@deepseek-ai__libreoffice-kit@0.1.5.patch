@@ -1,0 +1,30 @@
+diff --git a/lib/cli.js b/lib/cli.js
+index 18ffbc77a031cf603d2dc5b331050e54cda41e5f..bfa0b0235da43fe985d8524abe571398cb812482 100755
+--- a/lib/cli.js
++++ b/lib/cli.js
+@@ -1483,7 +1483,9 @@ const ENGINE_PREFIX = "@deepseek-ai/libreoffice-kit";
+ * @returns true when at least one resolution directory holds the package.
+ */
+ function installedPackageExists(name) {
+-	return (require.resolve.paths(name) ?? []).some((directory) => lstatSync(join(directory, name), { throwIfNoEntry: false }) !== void 0);
++	// Electron answers null, not undefined, for an entry missing from an ASAR archive, and a null
++	// answer must not read as an installed package.
++	return (require.resolve.paths(name) ?? []).some((directory) => lstatSync(join(directory, name), { throwIfNoEntry: false }) != null);
+ }
+ /**
+ * Return the optional package target for the current process ABI.
+diff --git a/lib/index.js b/lib/index.js
+index aac18a01c09916f51a76ceb81e47f75109d8497b..3053b1184f2bc5afa45d9fe81aa85f069f84c7fe 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1481,7 +1481,9 @@ const ENGINE_PREFIX = "@deepseek-ai/libreoffice-kit";
+ * @returns true when at least one resolution directory holds the package.
+ */
+ function installedPackageExists(name) {
+-	return (require.resolve.paths(name) ?? []).some((directory) => lstatSync(join(directory, name), { throwIfNoEntry: false }) !== void 0);
++	// Electron answers null, not undefined, for an entry missing from an ASAR archive, and a null
++	// answer must not read as an installed package.
++	return (require.resolve.paths(name) ?? []).some((directory) => lstatSync(join(directory, name), { throwIfNoEntry: false }) != null);
+ }
+ /**
+ * Return the optional package target for the current process ABI.
