@@ -1,7 +1,7 @@
 /** Vendored dai DID-token verifier, checked against the shared fixture. */
 
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { verifyDaiToken } from '../src/dai-token.ts'
 
 interface Fixture {
@@ -56,6 +56,20 @@ describe('verifyDaiToken', () => {
     const seenNonces = new Set<string>()
     expect(verifyDaiToken(fixture.token, { aud: fixture.aud, now: fixture.now, seenNonces })).not.toBeNull()
     expect(verifyDaiToken(fixture.token, { aud: fixture.aud, now: fixture.now, seenNonces })).toBeNull()
+  })
+
+  it('names the absent ML-DSA dependency instead of rejecting the token', async () => {
+    vi.resetModules()
+    vi.doMock('node:module', () => ({
+      createRequire: () => () => { throw new Error('bigtangle-ts is not installed') },
+    }))
+    try {
+      const { verifyDaiToken: verify } = await import('../src/dai-token.ts')
+      expect(() => verify(fixture.token, { aud: fixture.aud, now: fixture.now })).toThrow(/requires bigtangle-ts/u)
+    } finally {
+      vi.doUnmock('node:module')
+      vi.resetModules()
+    }
   })
 })
 
