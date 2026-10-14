@@ -1,0 +1,32 @@
+name: Stage the linked wallet package
+description: >-
+  Materialize bigtangle-ts at the sibling path packages/client/connection links,
+  the way the container deploy stages it. The dai branch needs the local checkout
+  because the published 1.0.7 tarball omits crypto/pq, so every job that installs
+  or builds the workspace needs this package in place first.
+
+runs:
+  using: composite
+  steps:
+    - if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        git clone --depth 1 https://github.com/bigt-ai-platform/wallet.git "$RUNNER_TEMP/wallet"
+        mkdir -p ../wallet/packages
+        cp -R "$RUNNER_TEMP/wallet/packages/bigtangle-ts" ../wallet/packages/bigtangle-ts
+        cd ../wallet/packages/bigtangle-ts
+        npm install --no-audit --no-fund
+        npm run build
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        git clone --depth 1 https://github.com/bigt-ai-platform/wallet.git "$env:RUNNER_TEMP/wallet"
+        New-Item -ItemType Directory -Force -Path "../wallet/packages" | Out-Null
+        Copy-Item -Recurse -Force "$env:RUNNER_TEMP/wallet/packages/bigtangle-ts" "../wallet/packages/bigtangle-ts"
+        Push-Location "../wallet/packages/bigtangle-ts"
+        npm install --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+        npm run build
+        $build = $LASTEXITCODE
+        Pop-Location
+        exit $build
