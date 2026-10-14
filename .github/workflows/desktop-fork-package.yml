@@ -1,0 +1,123 @@
+name: Package Desktop (fork) · unsigned installers
+
+# Fork-only convenience: build the user-installable Desktop artifacts from
+# GitHub-hosted runners instead of the self-hosted packaging runners that
+# windows-package.yml / macos-package.yml target.
+#
+# Unsigned output lands in
+# apps/desktop/.desktop-build/targets/<target>/unsigned-artifacts/. A Windows
+# build must embed the mandatory-update origin (input `update_origin`); unsigned
+# macOS builds skip that policy. Targets are host-gated — mac-arm64 needs an
+# Apple Silicon runner and mac-x64 an Intel one — so each target is its own job
+# (mac-x64 falls back to `macos-13` where `macos-15-intel` is unavailable).
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Comma-separated Desktop targets to build'
+        type: choice
+        options:
+          - win-x64,mac-arm64
+          - win-x64
+          - mac-arm64
+          - mac-x64
+          - win-x64,mac-arm64,mac-x64
+        default: win-x64,mac-arm64
+        required: true
+      update_origin:
+        description: 'win-x64 only: DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN, an absolute https origin'
+        type: string
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-fork-package
+  cancel-in-progress: false
+
+env:
+  # CI must never report to the production telemetry endpoint (AppCLIEntry).
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  win-x64:
+    if: contains(inputs.targets, 'win-x64')
+    runs-on: windows-2025
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DSH_DESKTOP_UPDATE_CHANNEL: nightly
+      DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: ${{ inputs.update_origin }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          exit $LASTEXITCODE
+      - name: Build the unsigned Windows installer
+        run: |
+          pnpm --dir apps/desktop run package:win:x64:unsigned
+          exit $LASTEXITCODE
+      - name: Upload installer
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-win-x64-unsigned
+          if-no-files-found: error
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**
+
+  mac-arm64:
+    if: contains(inputs.targets, 'mac-arm64')
+    runs-on: macos-14
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the unsigned macOS arm64 disk image
+        run: pnpm --dir apps/desktop run package:mac:arm64:unsigned
+      - name: Upload disk image
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-mac-arm64-unsigned
+          if-no-files-found: error
+          path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/**
+
+  mac-x64:
+    if: contains(inputs.targets, 'mac-x64')
+    runs-on: macos-15-intel
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the unsigned macOS x64 disk image
+        run: pnpm --dir apps/desktop run package:mac:x64:unsigned
+      - name: Upload disk image
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-mac-x64-unsigned
+          if-no-files-found: error
+          path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/**
