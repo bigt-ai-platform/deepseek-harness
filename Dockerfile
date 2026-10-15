@@ -69,7 +69,8 @@ RUN rm -rf /app/.git
 # reads. The Desktop packaging pipeline (see deploy.sh) already packed, pruned
 # and smoke-checked this payload, including the linked bigtangle-ts package.
 FROM node:${NODE_VERSION}-bookworm-slim AS unpack
-ARG APPIMAGE
+# deploy.sh stages the packaged Linux application here (see the header).
+ARG APPIMAGE=app-image.AppImage
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*

@@ -10,8 +10,9 @@
 #
 # The `min` image is the packaged Linux application, so this script builds the
 # AppImage first (the Desktop packaging pipeline packs, prunes and smoke-checks
-# that payload) and hands it to the image build. Reuse an existing artifact with
-# DSH_SKIP_PACKAGE=1, or point at one with DSH_APPIMAGE=<path>.
+# that payload) and stages it as app-image.AppImage for the image build. Reuse an
+# existing artifact with DSH_SKIP_PACKAGE=1, or point at one with
+# DSH_APPIMAGE=<path>.
 #
 #   ./deploy.sh [image-tag] [min|full|both]
 #     min   the packaged application, headless (default tag)
@@ -63,10 +64,17 @@ appimage() {
 rm -rf bigtangle-ts
 cp -a "$WALLET_PACKAGE" bigtangle-ts
 
+# The image build context carries exactly one Desktop artifact; the packaging
+# tree beside it stays out (see .dockerignore).
+STAGED_APPIMAGE="app-image.AppImage"
+cleanup() { rm -f "$STAGED_APPIMAGE"; }
+trap cleanup EXIT
+
 build() { # target tag
   echo "==> building $2 (target $1)"
   if [ "$1" = "min" ]; then
-    docker build --target min --build-arg "APPIMAGE=$(appimage)" -t "$2" .
+    cp "$(appimage)" "$STAGED_APPIMAGE"
+    docker build --target min -t "$2" .
   else
     docker build --target full -t "$2" .
   fi
