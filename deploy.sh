@@ -16,21 +16,22 @@
 #
 # Version. Every run derives a released (stable) deploy version from the newest
 # `v*` git tag (legacy `dsh-v*` tags are read too) and the workspace version,
-# creates an annotated git tag `v<version>`, and tags the images with it
-# alongside `latest`:
+# tags the images `:v<version>` and `:latest`, pushes both, and creates and
+# pushes the annotated git tag `v<version>` — the same release train as
+# ../wallet/deploy/deploy.sh:
 #   · a prerelease releases as its numbers — `0.2.1-alpha.3` -> `0.2.1`
 #   · a stable version advances its patch — `0.2.1` -> `0.2.2`
-# The tag is created only after the images build; it is not pushed unless
-# DSH_PUSH_TAG=1. Override the version with DSH_VERSION=<x.y.z>, or skip the git
-# tag entirely with DSH_NO_TAG=1.
+# The git tag is created after the images build and push. Override the version
+# with DSH_VERSION=<x.y.z>; skip the registry push with DSH_NO_PUSH=1; skip the
+# git tag with DSH_NO_TAG=1.
 #
 #   ./deploy.sh [image-repo] [min|full|both]
 #     image-repo  registry/namespace/repo without a tag; a trailing ":tag" is
 #                 stripped, because the version above owns the tag
 #     min         the packaged application, headless
 #     full        every shipped profile and provider, built from this checkout
-#     both        build min under <image-repo>:<version> and full under
-#                 <image-repo>:<version>-full
+#     both        build min under <image-repo>:v<version> and full under
+#                 <image-repo>:v<version>-full
 #
 # defaults: image-repo ghcr.io/bigt-ai-platform/deepseek-harness, variant both
 set -euo pipefail
@@ -156,10 +157,11 @@ trap cleanup EXIT
 
 echo "==> deploy version $VERSION ($GIT_TAG)"
 
-# Tag one variant: <repo>:<version><suffix> plus <repo>:latest<suffix>.
+# Tag one variant: <repo>:v<version><suffix> plus <repo>:latest<suffix>, and
+# push both to the registry (DSH_NO_PUSH=1 skips the push).
 build() { # target suffix
   local target="$1" suffix="$2"
-  local primary="$IMAGE_REPO:$VERSION$suffix"
+  local primary="$IMAGE_REPO:v$VERSION$suffix"
   local latest="$IMAGE_REPO:latest$suffix"
   echo "==> building $primary (target $target)"
   if [ "$target" = "min" ]; then
@@ -169,6 +171,10 @@ build() { # target suffix
     docker build --target full -t "$primary" -t "$latest" .
   fi
   docker image inspect "$primary" --format '    {{.RepoTags}} {{.Size}} bytes'
+  if [ "${DSH_NO_PUSH:-0}" != "1" ]; then
+    docker push "$primary"
+    docker push "$latest"
+  fi
 }
 
 case "$VARIANT" in
@@ -180,7 +186,8 @@ case "$VARIANT" in
     ;;
 esac
 
-# Tag the source last, so a failed build never leaves a dangling deploy tag.
+# Tag the source after the images built and pushed (a failed build never leaves
+# a dangling deploy tag), then push the tag like the wallet release train.
 if [ "${DSH_NO_TAG:-0}" != "1" ]; then
   if git rev-parse --verify --quiet "refs/tags/$GIT_TAG" >/dev/null; then
     echo "==> $GIT_TAG already exists"
@@ -188,9 +195,9 @@ if [ "${DSH_NO_TAG:-0}" != "1" ]; then
     git tag -a "$GIT_TAG" -m "dsh $VERSION"
     echo "==> tagged $GIT_TAG"
   fi
-  if [ "${DSH_PUSH_TAG:-0}" = "1" ]; then
-    git push origin "$GIT_TAG"
-  else
+  if [ "${DSH_NO_PUSH:-0}" = "1" ]; then
     echo "    push it with: git push origin $GIT_TAG"
+  else
+    git push origin "$GIT_TAG"
   fi
 fi
