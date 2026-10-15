@@ -96,6 +96,7 @@ MACOS_RUN=""
 DESKTOP_MODE="release"
 UPDATE_ORIGIN=""
 FORK_RUN=""
+GH_REPO=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 step() { echo -e "\n${GREEN}==>${NC} $*"; }
@@ -132,6 +133,7 @@ while [ $# -gt 0 ]; do
     --macos-run)       MACOS_RUN="${2:?}"; shift 2 ;;
     --desktop)         DESKTOP_MODE="${2:?}"; shift 2 ;;
     --update-origin)   UPDATE_ORIGIN="${2:?}"; shift 2 ;;
+    --repo)            GH_REPO="${2:?}"; shift 2 ;;
     -h|--help)         usage; exit 0 ;;
     -*)                fail "unknown option '$1' (try --help)" ;;
     *)                 [ -z "$REQUEST" ] || fail "unexpected argument '$1'"
@@ -171,6 +173,21 @@ CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [ "$CURRENT_BRANCH" = "$BRANCH" ] || fail "on '$CURRENT_BRANCH'; a release runs from $BRANCH"
 command -v gh >/dev/null 2>&1 || fail "gh is required for the Desktop dispatch"
 gh auth status >/dev/null 2>&1 || fail "gh is not authenticated"
+
+# Resolve the GitHub repository from `origin` once. A checkout with an `upstream`
+# remote makes gh guess between them, so every call passes --repo explicitly.
+if [ -z "$GH_REPO" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  case "$ORIGIN_URL" in
+    *github.com[:/]*)
+      GH_REPO="${ORIGIN_URL#*github.com}"
+      GH_REPO="${GH_REPO#[:/]}"
+      GH_REPO="${GH_REPO%.git}"
+      ;;
+  esac
+fi
+[ -n "$GH_REPO" ] || fail "cannot resolve the GitHub repo from origin; pass --repo <owner/name>"
+echo "    github repo $GH_REPO"
 if [ "$DO_DEPLOY" = "1" ]; then
   command -v docker >/dev/null 2>&1 || fail "docker is required for deploy.sh"
   docker info >/dev/null 2>&1 || fail "the docker daemon is not reachable"
@@ -234,24 +251,13 @@ else
   git rev-parse --verify --quiet "refs/tags/$GIT_TAG" >/dev/null || info "tag $GIT_TAG is not created locally either"
 fi
 
-# ── 3. container images ────────────────────────────────────────────────────
-if [ "$DO_DEPLOY" = "1" ]; then
-  step "Deploying the container images (deploy.sh)"
-  if [ -n "$DEPLOY_VERSION" ]; then
-    DSH_VERSION="$DEPLOY_VERSION" ./deploy.sh
-  else
-    ./deploy.sh
-  fi
-else
-  step "Skipping deploy.sh (--no-deploy)"
-fi
-
-# ── 4. Desktop installers ──────────────────────────────────────────────────
+# ── 3. Desktop installers ──────────────────────────────────────────────────
+# Dispatched before the images so the long CI build overlaps deploy.sh; the
+# artifacts are only consumed at step 5.
+[ -n "$SOURCE_REF" ] || SOURCE_REF="$GIT_TAG"
 if [ "$DO_DESKTOP" != "1" ]; then
   step "Skipping the Desktop dispatch (--no-desktop)"
-  echo "    version $VERSION is tagged $GIT_TAG"
-  exit 0
-fi
+else
 
 [ -n "$SOURCE_REF" ] || SOURCE_REF="$GIT_TAG"
 if [ "$SOURCE_REF" != "master" ] && [ "$SOURCE_REF" != "$GIT_TAG" ]; then
@@ -280,17 +286,17 @@ dispatch() { # workflow extra-field...
     fields+=(-f "test_release_id=$TEST_RELEASE_ID")
   fi
   fields+=("$@")
-  gh workflow run "$workflow" --ref "$BRANCH" "${fields[@]}"
+  gh workflow run "$workflow" --repo "$GH_REPO" --ref "$BRANCH" "${fields[@]}"
 }
 
 if [ "$DESKTOP_MODE" = "fork" ]; then
   step "Dispatching Package Desktop (fork) · unsigned installers ($FORK_WORKFLOW)"
-  gh workflow run "$FORK_WORKFLOW" --ref "$BRANCH" \
+  gh workflow run "$FORK_WORKFLOW" --repo "$GH_REPO" --ref "$BRANCH" \
     -f "targets=win-x64,mac-arm64" -f "update_origin=$UPDATE_ORIGIN"
   pending_fork() {
     local id=""
     for _ in 1 2 3 4 5 6 7 8 9 10; do
-      id="$(gh run list --workflow "$FORK_WORKFLOW" --branch "$BRANCH" --event workflow_dispatch \
+      id="$(gh run list --repo "$GH_REPO" --workflow "$FORK_WORKFLOW" --branch "$BRANCH" --event workflow_dispatch \
         --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
       if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
       sleep 3
@@ -311,7 +317,7 @@ fi
 pending_run() { # workflow -> newest dispatch run id
   local id=""
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    id="$(gh run list --workflow "$1" --branch "$BRANCH" --event workflow_dispatch \
+    id="$(gh run list --repo "$GH_REPO" --workflow "$1" --branch "$BRANCH" --event workflow_dispatch \
       --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
     if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
     sleep 3
@@ -323,20 +329,33 @@ if [ "$DESKTOP_MODE" = "release" ]; then
   [ -n "$MACOS_RUN" ] || MACOS_RUN="$(pending_run "$MAC_WORKFLOW" || true)"
   info "windows run: ${WINDOWS_RUN:-unknown}"
   info "macos run:   ${MACOS_RUN:-unknown}"
+  fi
+fi
+
+# ── 4. container images ────────────────────────────────────────────────────
+if [ "$DO_DEPLOY" = "1" ]; then
+  step "Deploying the container images (deploy.sh)"
+  if [ -n "$DEPLOY_VERSION" ]; then
+    DSH_VERSION="$DEPLOY_VERSION" ./deploy.sh
+  else
+    ./deploy.sh
+  fi
+else
+  step "Skipping deploy.sh (--no-deploy)"
 fi
 
 # Wait when asked to follow, and whenever the artifacts are needed.
-if [ "$WATCH" = "1" ] || [ "$UPLOAD" = "1" ]; then
+if [ "$DO_DESKTOP" = "1" ] && { [ "$WATCH" = "1" ] || [ "$UPLOAD" = "1" ]; }; then
   step "Waiting for the packaging run(s)"
   if [ "$DESKTOP_MODE" = "fork" ]; then
     [ -n "$FORK_RUN" ] || fail "fork packaging run id unknown; open the Actions tab"
-    gh run watch "$FORK_RUN" --exit-status --interval 30 >/dev/null \
+    gh run watch "$FORK_RUN" --repo "$GH_REPO" --exit-status --interval 30 >/dev/null \
       || fail "fork packaging run $FORK_RUN did not succeed"
   else
     [ -n "$WINDOWS_RUN" ] || fail "windows run id unknown; pass --windows-run <id>"
     [ -n "$MACOS_RUN" ] || fail "macos run id unknown; pass --macos-run <id>"
-    gh run watch "$WINDOWS_RUN" --exit-status --interval 30 >/dev/null || fail "windows run $WINDOWS_RUN did not succeed"
-    gh run watch "$MACOS_RUN" --exit-status --interval 30 >/dev/null || fail "macos run $MACOS_RUN did not succeed"
+    gh run watch "$WINDOWS_RUN" --repo "$GH_REPO" --exit-status --interval 30 >/dev/null || fail "windows run $WINDOWS_RUN did not succeed"
+    gh run watch "$MACOS_RUN" --repo "$GH_REPO" --exit-status --interval 30 >/dev/null || fail "macos run $MACOS_RUN did not succeed"
   fi
 fi
 
@@ -377,14 +396,14 @@ if [ "$UPLOAD" = "1" ]; then
   info "linux:   $(basename "$LINUX_ARTIFACT")"
 
   if [ "$DESKTOP_MODE" = "fork" ]; then
-    gh run download "$FORK_RUN" --dir "$STAGE/windows" --pattern 'desktop-win-x64-*' \
+    gh run download "$FORK_RUN" --repo "$GH_REPO" --dir "$STAGE/windows" --pattern 'desktop-win-x64-*' \
       || fail "run $FORK_RUN carries no desktop-win-x64 artifact"
-    gh run download "$FORK_RUN" --dir "$STAGE/macos" --pattern 'desktop-mac-*' \
+    gh run download "$FORK_RUN" --repo "$GH_REPO" --dir "$STAGE/macos" --pattern 'desktop-mac-*' \
       || fail "run $FORK_RUN carries no desktop-mac artifact"
   else
-    gh run download "$WINDOWS_RUN" --dir "$STAGE/windows" --pattern 'windows-x64-*' \
+    gh run download "$WINDOWS_RUN" --repo "$GH_REPO" --dir "$STAGE/windows" --pattern 'windows-x64-*' \
       || fail "run $WINDOWS_RUN carries no windows-x64 artifact"
-    gh run download "$MACOS_RUN" --dir "$STAGE/macos" --pattern 'macos-arm64-*' \
+    gh run download "$MACOS_RUN" --repo "$GH_REPO" --dir "$STAGE/macos" --pattern 'macos-arm64-*' \
       || fail "run $MACOS_RUN carries no macos-arm64 artifact"
   fi
   info "windows: $(find "$STAGE/windows" -type f | wc -l) file(s)"
@@ -428,13 +447,17 @@ if [ "$UPLOAD" = "1" ]; then
 fi
 
 echo
-echo -e "${GREEN}Release $VERSION dispatched.${NC}"
+if [ "$DO_DESKTOP" = "1" ]; then
+  echo -e "${GREEN}Release $VERSION dispatched.${NC}"
+else
+  echo -e "${GREEN}Release $VERSION finished.${NC}"
+fi
 echo "  source ref:   $SOURCE_REF"
 if [ "$DESKTOP_MODE" = "fork" ]; then
-  echo "  desktop:      gh run view ${FORK_RUN:-<id>}   (fork, unsigned, hosted runners)"
+  echo "  desktop:      gh run view ${FORK_RUN:-<id>} --repo $GH_REPO   (fork, unsigned, hosted runners)"
 else
-  echo "  windows:      gh run view ${WINDOWS_RUN:-<id>}"
-  echo "  macos:        gh run view ${MACOS_RUN:-<id>}"
+  echo "  windows:      gh run view ${WINDOWS_RUN:-<id>} --repo $GH_REPO"
+  echo "  macos:        gh run view ${MACOS_RUN:-<id>} --repo $GH_REPO"
 fi
 if [ "$UPLOAD" = "1" ]; then echo "  minio:        $MINIO_BUCKET/$MINIO_PREFIX"; fi
 if [ "$DESKTOP_MODE" = "release" ]; then
