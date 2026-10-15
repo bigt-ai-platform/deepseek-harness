@@ -15,8 +15,9 @@
 # DSH_APPIMAGE=<path>.
 #
 # Version. Every run derives a released (stable) deploy version from the newest
-# `dsh-v*` git tag and the workspace version, creates an annotated git tag
-# `dsh-v<version>`, and tags the images with it alongside `latest`:
+# `v*` git tag (legacy `dsh-v*` tags are read too) and the workspace version,
+# creates an annotated git tag `v<version>`, and tags the images with it
+# alongside `latest`:
 #   · a prerelease releases as its numbers — `0.2.1-alpha.3` -> `0.2.1`
 #   · a stable version advances its patch — `0.2.1` -> `0.2.2`
 # The tag is created only after the images build; it is not pushed unless
@@ -67,7 +68,6 @@ version() {
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
-const PREFIX = 'dsh-v'
 const parse = (v) => {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(v)
   return m === null ? null : { nums: [+m[1], +m[2], +m[3]], pre: m[4] }
@@ -97,8 +97,13 @@ const cmp = (a, b) => {
   return cmpPre(a.pre, b.pre)
 }
 
-const tags = execFileSync('git', ['tag', '--list', `${PREFIX}*`], { encoding: 'utf8' })
-  .split('\n').filter((line) => line !== '').map((tag) => tag.slice(PREFIX.length))
+const tags = execFileSync('git', ['tag', '--list', 'v*', 'dsh-v*'], { encoding: 'utf8' })
+  .split('\n').filter((line) => line !== '')
+  .map((tag) => {
+    const m = /^(?:dsh-)?v(.+)$/.exec(tag)
+    return m === null ? null : m[1]
+  })
+  .filter((version) => version !== null)
 const manifest = JSON.parse(readFileSync('package.json', 'utf8')).version
 const candidates = [...tags, manifest].map(parse).filter((v) => v !== null)
 const max = candidates.reduce((a, b) => (cmp(b, a) > 0 ? b : a))
@@ -115,7 +120,7 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   echo "error: not a semver deploy version: '$VERSION'" >&2
   exit 1
 fi
-GIT_TAG="dsh-v$VERSION"
+GIT_TAG="v$VERSION"
 
 # Print the AppImage the `min` image unpacks, building it when absent.
 appimage() {
