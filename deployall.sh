@@ -5,7 +5,8 @@
 #   1. bump      `release:dsh` rewrites the family manifests and commits them
 #   2. tag       `dsh-v<version>` — the ref the Desktop packaging workflows accept
 #   3. deploy    ./deploy.sh builds + pushes the container images and its own tag
-#   4. desktop   `gh workflow run` Package Desktop · Windows and · macOS
+#   4. desktop   dispatch the Desktop installers (`--desktop release` for the two
+#                signed self-hosted workflows, `fork` for the hosted unsigned one)
 #   5. upload    collect the three installers and copy them to a MinIO bucket
 #
 # Usage:
@@ -28,8 +29,15 @@
 #                                 default: product for production, auto for test
 #   --build-version <x.y.z>       required only with --version-mode manual
 #   --deploy-version <x.y.z>      DSH_VERSION for deploy.sh; default: deploy.sh derives it
+#   --desktop release|fork        release: the two signed self-hosted workflows;
+#                                 fork: desktop-fork-package.yml on GitHub-hosted
+#                                 runners (unsigned win-x64 + mac-arm64). The two
+#                                 production workflows need the registered runners
+#                                 dsh-win-package-trial / dsh-mac-package-trial
+#   --update-origin <https>       win-x64 mandatory-update policy origin; required
+#                                 with --desktop fork
 #   --no-bump / --no-deploy / --no-desktop / --no-push
-#   --watch                       follow both packaging runs to completion
+#   --watch                       follow the packaging run(s) to completion
 #
 # Upload options (step 5):
 #   --upload                      copy the Linux, Windows and macOS installers to MinIO
@@ -57,6 +65,7 @@ cd "$(dirname "$0")"
 
 PROD_WORKFLOW="windows-package.yml"
 MAC_WORKFLOW="macos-package.yml"
+FORK_WORKFLOW="desktop-fork-package.yml"
 BRANCH="master"
 MC_IMAGE="ghcr.io/bigt-ai-platform/mc:latest"
 
@@ -84,6 +93,9 @@ MINIO_PUBLIC=0
 LINUX_ARTIFACT=""
 WINDOWS_RUN=""
 MACOS_RUN=""
+DESKTOP_MODE="release"
+UPDATE_ORIGIN=""
+FORK_RUN=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 step() { echo -e "\n${GREEN}==>${NC} $*"; }
@@ -118,6 +130,8 @@ while [ $# -gt 0 ]; do
     --linux-artifact)  LINUX_ARTIFACT="${2:?}"; shift 2 ;;
     --windows-run)     WINDOWS_RUN="${2:?}"; shift 2 ;;
     --macos-run)       MACOS_RUN="${2:?}"; shift 2 ;;
+    --desktop)         DESKTOP_MODE="${2:?}"; shift 2 ;;
+    --update-origin)   UPDATE_ORIGIN="${2:?}"; shift 2 ;;
     -h|--help)         usage; exit 0 ;;
     -*)                fail "unknown option '$1' (try --help)" ;;
     *)                 [ -z "$REQUEST" ] || fail "unexpected argument '$1'"
@@ -140,6 +154,13 @@ fi
 for site in $(echo "$MINIO_SITES" | tr ',' ' '); do
   case "$site" in all|eu|us|asia) ;; *) fail "--minio-sites entries must be eu, us or asia (or all)" ;; esac
 done
+case "$DESKTOP_MODE" in release|fork) ;; *) fail "--desktop must be release or fork" ;; esac
+if [ -n "$UPDATE_ORIGIN" ] && ! [[ "$UPDATE_ORIGIN" =~ ^https://[^/]+/?$ ]]; then
+  fail "--update-origin must be an https origin such as https://download.example.com"
+fi
+if [ "$DESKTOP_MODE" = "fork" ] && [ "$DO_DESKTOP" = "1" ] && [ -z "$UPDATE_ORIGIN" ]; then
+  fail "--desktop fork needs --update-origin <https origin>: the win-x64 build embeds the mandatory-update policy origin"
+fi
 
 # ── preconditions ──────────────────────────────────────────────────────────
 step "Checking preconditions"
@@ -262,11 +283,29 @@ dispatch() { # workflow extra-field...
   gh workflow run "$workflow" --ref "$BRANCH" "${fields[@]}"
 }
 
-step "Dispatching Package Desktop · Windows ($PROD_WORKFLOW)"
-dispatch "$PROD_WORKFLOW" -f "signing=$WINDOWS_SIGNING"
+if [ "$DESKTOP_MODE" = "fork" ]; then
+  step "Dispatching Package Desktop (fork) · unsigned installers ($FORK_WORKFLOW)"
+  gh workflow run "$FORK_WORKFLOW" --ref "$BRANCH" \
+    -f "targets=win-x64,mac-arm64" -f "update_origin=$UPDATE_ORIGIN"
+  pending_fork() {
+    local id=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      id="$(gh run list --workflow "$FORK_WORKFLOW" --branch "$BRANCH" --event workflow_dispatch \
+        --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+      if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
+      sleep 3
+    done
+    return 1
+  }
+  FORK_RUN="$(pending_fork || true)"
+  info "fork packaging run: ${FORK_RUN:-unknown}"
+else
+  step "Dispatching Package Desktop · Windows ($PROD_WORKFLOW)"
+  dispatch "$PROD_WORKFLOW" -f "signing=$WINDOWS_SIGNING"
 
-step "Dispatching Package Desktop · macOS ($MAC_WORKFLOW)"
-dispatch "$MAC_WORKFLOW" -f "skip_notarization=false"
+  step "Dispatching Package Desktop · macOS ($MAC_WORKFLOW)"
+  dispatch "$MAC_WORKFLOW" -f "skip_notarization=false"
+fi
 
 # The dispatch registers the run asynchronously, so poll for its id.
 pending_run() { # workflow -> newest dispatch run id
@@ -279,18 +318,26 @@ pending_run() { # workflow -> newest dispatch run id
   done
   return 1
 }
-[ -n "$WINDOWS_RUN" ] || WINDOWS_RUN="$(pending_run "$PROD_WORKFLOW" || true)"
-[ -n "$MACOS_RUN" ] || MACOS_RUN="$(pending_run "$MAC_WORKFLOW" || true)"
-info "windows run: ${WINDOWS_RUN:-unknown}"
-info "macos run:   ${MACOS_RUN:-unknown}"
+if [ "$DESKTOP_MODE" = "release" ]; then
+  [ -n "$WINDOWS_RUN" ] || WINDOWS_RUN="$(pending_run "$PROD_WORKFLOW" || true)"
+  [ -n "$MACOS_RUN" ] || MACOS_RUN="$(pending_run "$MAC_WORKFLOW" || true)"
+  info "windows run: ${WINDOWS_RUN:-unknown}"
+  info "macos run:   ${MACOS_RUN:-unknown}"
+fi
 
 # Wait when asked to follow, and whenever the artifacts are needed.
 if [ "$WATCH" = "1" ] || [ "$UPLOAD" = "1" ]; then
-  step "Waiting for both packaging runs"
-  [ -n "$WINDOWS_RUN" ] || fail "windows run id unknown; pass --windows-run <id>"
-  [ -n "$MACOS_RUN" ] || fail "macos run id unknown; pass --macos-run <id>"
-  gh run watch "$WINDOWS_RUN" --exit-status --interval 30 >/dev/null || fail "windows run $WINDOWS_RUN did not succeed"
-  gh run watch "$MACOS_RUN" --exit-status --interval 30 >/dev/null || fail "macos run $MACOS_RUN did not succeed"
+  step "Waiting for the packaging run(s)"
+  if [ "$DESKTOP_MODE" = "fork" ]; then
+    [ -n "$FORK_RUN" ] || fail "fork packaging run id unknown; open the Actions tab"
+    gh run watch "$FORK_RUN" --exit-status --interval 30 >/dev/null \
+      || fail "fork packaging run $FORK_RUN did not succeed"
+  else
+    [ -n "$WINDOWS_RUN" ] || fail "windows run id unknown; pass --windows-run <id>"
+    [ -n "$MACOS_RUN" ] || fail "macos run id unknown; pass --macos-run <id>"
+    gh run watch "$WINDOWS_RUN" --exit-status --interval 30 >/dev/null || fail "windows run $WINDOWS_RUN did not succeed"
+    gh run watch "$MACOS_RUN" --exit-status --interval 30 >/dev/null || fail "macos run $MACOS_RUN did not succeed"
+  fi
 fi
 
 # ── 5. MinIO upload ────────────────────────────────────────────────────────
@@ -329,10 +376,17 @@ if [ "$UPLOAD" = "1" ]; then
   cp "$LINUX_ARTIFACT" "$STAGE/linux/"
   info "linux:   $(basename "$LINUX_ARTIFACT")"
 
-  gh run download "$WINDOWS_RUN" --dir "$STAGE/windows" --pattern 'windows-x64-*' \
-    || fail "run $WINDOWS_RUN carries no windows-x64 artifact"
-  gh run download "$MACOS_RUN" --dir "$STAGE/macos" --pattern 'macos-arm64-*' \
-    || fail "run $MACOS_RUN carries no macos-arm64 artifact"
+  if [ "$DESKTOP_MODE" = "fork" ]; then
+    gh run download "$FORK_RUN" --dir "$STAGE/windows" --pattern 'desktop-win-x64-*' \
+      || fail "run $FORK_RUN carries no desktop-win-x64 artifact"
+    gh run download "$FORK_RUN" --dir "$STAGE/macos" --pattern 'desktop-mac-*' \
+      || fail "run $FORK_RUN carries no desktop-mac artifact"
+  else
+    gh run download "$WINDOWS_RUN" --dir "$STAGE/windows" --pattern 'windows-x64-*' \
+      || fail "run $WINDOWS_RUN carries no windows-x64 artifact"
+    gh run download "$MACOS_RUN" --dir "$STAGE/macos" --pattern 'macos-arm64-*' \
+      || fail "run $MACOS_RUN carries no macos-arm64 artifact"
+  fi
   info "windows: $(find "$STAGE/windows" -type f | wc -l) file(s)"
   info "macos:   $(find "$STAGE/macos" -type f | wc -l) file(s)"
 
@@ -376,7 +430,13 @@ fi
 echo
 echo -e "${GREEN}Release $VERSION dispatched.${NC}"
 echo "  source ref:   $SOURCE_REF"
-echo "  windows:      gh run view ${WINDOWS_RUN:-<id>}"
-echo "  macos:        gh run view ${MACOS_RUN:-<id>}"
+if [ "$DESKTOP_MODE" = "fork" ]; then
+  echo "  desktop:      gh run view ${FORK_RUN:-<id>}   (fork, unsigned, hosted runners)"
+else
+  echo "  windows:      gh run view ${WINDOWS_RUN:-<id>}"
+  echo "  macos:        gh run view ${MACOS_RUN:-<id>}"
+fi
 if [ "$UPLOAD" = "1" ]; then echo "  minio:        $MINIO_BUCKET/$MINIO_PREFIX"; fi
-echo "  publish next: Publish Desktop COS → Run workflow (package_run_id from the run URL)"
+if [ "$DESKTOP_MODE" = "release" ]; then
+  echo "  publish next: Publish Desktop COS → Run workflow (package_run_id from the run URL)"
+fi
