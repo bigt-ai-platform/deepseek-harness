@@ -36,6 +36,8 @@
 #                                 dsh-win-package-trial / dsh-mac-package-trial
 #   --update-origin <https>       win-x64 mandatory-update policy origin; required
 #                                 with --desktop fork
+#   --fork-targets <choice>       fork workflow targets (default
+#                                 win-x64,mac-arm64,linux-x64)
 #   --no-bump / --no-deploy / --no-desktop / --no-push
 #   --watch                       follow the packaging run(s) to completion
 #
@@ -96,6 +98,7 @@ MACOS_RUN=""
 DESKTOP_MODE="release"
 UPDATE_ORIGIN=""
 FORK_RUN=""
+FORK_TARGETS="win-x64,mac-arm64,linux-x64"
 GH_REPO=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -133,6 +136,7 @@ while [ $# -gt 0 ]; do
     --macos-run)       MACOS_RUN="${2:?}"; shift 2 ;;
     --desktop)         DESKTOP_MODE="${2:?}"; shift 2 ;;
     --update-origin)   UPDATE_ORIGIN="${2:?}"; shift 2 ;;
+    --fork-targets)    FORK_TARGETS="${2:?}"; shift 2 ;;
     --repo)            GH_REPO="${2:?}"; shift 2 ;;
     -h|--help)         usage; exit 0 ;;
     -*)                fail "unknown option '$1' (try --help)" ;;
@@ -163,6 +167,11 @@ fi
 if [ "$DESKTOP_MODE" = "fork" ] && [ "$DO_DESKTOP" = "1" ] && [ -z "$UPDATE_ORIGIN" ]; then
   fail "--desktop fork needs --update-origin <https origin>: the win-x64 build embeds the mandatory-update policy origin"
 fi
+# The fork workflow's `targets` input is a fixed choice list.
+case "$FORK_TARGETS" in
+  win-x64,mac-arm64,linux-x64|win-x64,mac-arm64,mac-x64,linux-x64|win-x64|mac-arm64|mac-x64|linux-x64) ;;
+  *) fail "--fork-targets must be one of the workflow's choices (e.g. win-x64,mac-arm64,linux-x64)" ;;
+esac
 
 # ── preconditions ──────────────────────────────────────────────────────────
 step "Checking preconditions"
@@ -292,7 +301,7 @@ dispatch() { # workflow extra-field...
 if [ "$DESKTOP_MODE" = "fork" ]; then
   step "Dispatching Package Desktop (fork) · unsigned installers ($FORK_WORKFLOW)"
   gh workflow run "$FORK_WORKFLOW" --repo "$GH_REPO" --ref "$BRANCH" \
-    -f "targets=win-x64,mac-arm64" -f "update_origin=$UPDATE_ORIGIN"
+    -f "targets=$FORK_TARGETS" -f "update_origin=$UPDATE_ORIGIN"
   pending_fork() {
     local id=""
     for _ in 1 2 3 4 5 6 7 8 9 10; do
