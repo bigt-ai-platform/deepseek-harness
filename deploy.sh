@@ -14,20 +14,39 @@
 # existing artifact with DSH_SKIP_PACKAGE=1, or point at one with
 # DSH_APPIMAGE=<path>.
 #
-#   ./deploy.sh [image-tag] [min|full|both]
-#     min   the packaged application, headless (default tag)
-#     full  every shipped profile and provider, built from this checkout
-#     both  build min under <image-tag> and full under <image-tag>-full
+# Version. Every run derives a released (stable) deploy version from the newest
+# `dsh-v*` git tag and the workspace version, creates an annotated git tag
+# `dsh-v<version>`, and tags the images with it alongside `latest`:
+#   · a prerelease releases as its numbers — `0.2.1-alpha.3` -> `0.2.1`
+#   · a stable version advances its patch — `0.2.1` -> `0.2.2`
+# The tag is created only after the images build; it is not pushed unless
+# DSH_PUSH_TAG=1. Override the version with DSH_VERSION=<x.y.z>, or skip the git
+# tag entirely with DSH_NO_TAG=1.
 #
-# defaults: image-tag ghcr.io/bigt-ai-platform/deepseek-harness:latest, variant both
+#   ./deploy.sh [image-repo] [min|full|both]
+#     image-repo  registry/namespace/repo without a tag; a trailing ":tag" is
+#                 stripped, because the version above owns the tag
+#     min         the packaged application, headless
+#     full        every shipped profile and provider, built from this checkout
+#     both        build min under <image-repo>:<version> and full under
+#                 <image-repo>:<version>-full
+#
+# defaults: image-repo ghcr.io/bigt-ai-platform/deepseek-harness, variant both
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-IMAGE_TAG="${1:-ghcr.io/bigt-ai-platform/deepseek-harness:latest}"
+IMAGE_REPO="${1:-ghcr.io/bigt-ai-platform/deepseek-harness}"
 VARIANT="${2:-both}"
 WALLET_PACKAGE="../wallet/packages/bigtangle-ts"
 APPIMAGE_DIR="apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts"
+
+# The deploy version owns the tag: drop a trailing ":tag" from the repository
+# argument, but leave a registry port (`host:5000/repo`) alone.
+TAG_TAIL="${IMAGE_REPO##*:}"
+if [ "$TAG_TAIL" != "$IMAGE_REPO" ] && [[ "$TAG_TAIL" != */* ]]; then
+  IMAGE_REPO="${IMAGE_REPO%:*}"
+fi
 
 case "$VARIANT" in
   min | full | both) ;;
@@ -37,6 +56,66 @@ if [ ! -d "$WALLET_PACKAGE" ]; then
   echo "error: $WALLET_PACKAGE not found; clone the wallet checkout beside this repo" >&2
   exit 1
 fi
+
+# The released deploy version (see the header). DSH_VERSION passes it through.
+version() {
+  if [ -n "${DSH_VERSION:-}" ]; then
+    printf '%s' "$DSH_VERSION"
+    return
+  fi
+  node --input-type=module <<'NODE'
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+
+const PREFIX = 'dsh-v'
+const parse = (v) => {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(v)
+  return m === null ? null : { nums: [+m[1], +m[2], +m[3]], pre: m[4] }
+}
+const cmpPre = (a, b) => {
+  if (a === undefined && b === undefined) return 0
+  if (a === undefined) return 1
+  if (b === undefined) return -1
+  const A = a.split('.')
+  const B = b.split('.')
+  for (let i = 0; i < Math.max(A.length, B.length); i += 1) {
+    const x = A[i]
+    const y = B[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    if (x === y) continue
+    const xn = /^\d+$/.test(x)
+    const yn = /^\d+$/.test(y)
+    if (xn && yn) return Number(x) - Number(y)
+    if (xn !== yn) return xn ? -1 : 1
+    return x < y ? -1 : 1
+  }
+  return 0
+}
+const cmp = (a, b) => {
+  for (let i = 0; i < 3; i += 1) if (a.nums[i] !== b.nums[i]) return a.nums[i] - b.nums[i]
+  return cmpPre(a.pre, b.pre)
+}
+
+const tags = execFileSync('git', ['tag', '--list', `${PREFIX}*`], { encoding: 'utf8' })
+  .split('\n').filter((line) => line !== '').map((tag) => tag.slice(PREFIX.length))
+const manifest = JSON.parse(readFileSync('package.json', 'utf8')).version
+const candidates = [...tags, manifest].map(parse).filter((v) => v !== null)
+const max = candidates.reduce((a, b) => (cmp(b, a) > 0 ? b : a))
+const existing = new Set(tags)
+// Released version: drop a prerelease; a stable version advances its patch.
+let nums = max.pre === undefined ? [max.nums[0], max.nums[1], max.nums[2] + 1] : [...max.nums]
+while (existing.has(nums.join('.'))) nums = [nums[0], nums[1], nums[2] + 1]
+process.stdout.write(nums.join('.'))
+NODE
+}
+
+VERSION="$(version)"
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "error: not a semver deploy version: '$VERSION'" >&2
+  exit 1
+fi
+GIT_TAG="dsh-v$VERSION"
 
 # Print the AppImage the `min` image unpacks, building it when absent.
 appimage() {
@@ -70,22 +149,43 @@ STAGED_APPIMAGE="app-image.AppImage"
 cleanup() { rm -f "$STAGED_APPIMAGE"; }
 trap cleanup EXIT
 
-build() { # target tag
-  echo "==> building $2 (target $1)"
-  if [ "$1" = "min" ]; then
+echo "==> deploy version $VERSION ($GIT_TAG)"
+
+# Tag one variant: <repo>:<version><suffix> plus <repo>:latest<suffix>.
+build() { # target suffix
+  local target="$1" suffix="$2"
+  local primary="$IMAGE_REPO:$VERSION$suffix"
+  local latest="$IMAGE_REPO:latest$suffix"
+  echo "==> building $primary (target $target)"
+  if [ "$target" = "min" ]; then
     cp "$(appimage)" "$STAGED_APPIMAGE"
-    docker build --target min -t "$2" .
+    docker build --target min -t "$primary" -t "$latest" .
   else
-    docker build --target full -t "$2" .
+    docker build --target full -t "$primary" -t "$latest" .
   fi
-  docker image inspect "$2" --format '    {{.RepoTags}} {{.Size}} bytes'
+  docker image inspect "$primary" --format '    {{.RepoTags}} {{.Size}} bytes'
 }
 
 case "$VARIANT" in
-  min) build min "$IMAGE_TAG" ;;
-  full) build full "$IMAGE_TAG" ;;
+  min) build min "" ;;
+  full) build full "-full" ;;
   both)
-    build min "$IMAGE_TAG"
-    build full "$IMAGE_TAG-full"
+    build min ""
+    build full "-full"
     ;;
 esac
+
+# Tag the source last, so a failed build never leaves a dangling deploy tag.
+if [ "${DSH_NO_TAG:-0}" != "1" ]; then
+  if git rev-parse --verify --quiet "refs/tags/$GIT_TAG" >/dev/null; then
+    echo "==> $GIT_TAG already exists"
+  else
+    git tag -a "$GIT_TAG" -m "dsh $VERSION"
+    echo "==> tagged $GIT_TAG"
+  fi
+  if [ "${DSH_PUSH_TAG:-0}" = "1" ]; then
+    git push origin "$GIT_TAG"
+  else
+    echo "    push it with: git push origin $GIT_TAG"
+  fi
+fi
