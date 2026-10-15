@@ -1,31 +1,36 @@
 # syntax=docker/dockerfile:1
 # DeepSeek Harness (`dsh`) container image.
 #
-# Two runtime variants share one builder:
-#   min  — web profile only. Drops tree/website/snapshot fixtures and dependency
-#          trees that are dev/test-only tooling or providers the `web`
-#          composition does not mount (codex and Claude Code subagents, the
-#          experimental CUA driver). Smallest deployable image.
-#   full — every shipped profile and provider; only the VCS history is dropped.
+# Two runtime variants:
+#   min  — the packaged Linux application, stripped to its headless runtime: the
+#          release closure (lib output only, no sources, no dev tooling, no tsx),
+#          the bundled Python interpreter, and the Office WASM engine. Built from
+#          the AppImage the Desktop packaging pipeline produces, so the container
+#          ships exactly the payload the Desktop smoke check verified.
+#   full — every shipped profile and provider, built from this checkout; only the
+#          VCS history is dropped.
 #
-# Multi-stage build from the local checkout:
+# Multi-stage build:
 #   1. builder — installs dependencies with pnpm and runs `pnpm run build`
 #              (host native addon, tsc/tsdown lib output, web frontend).
 #              Needs git: scripts/client-build-environment.ts stamps the build
 #              from `git rev-parse HEAD`, so .git must stay in the context.
-#   2. runtime — slim Node image with the built tree, launched through the
-#              same source entrypoint the repo uses (`pnpm dsh ...`).
-#              Full node_modules are kept because the launcher runs through
-#              tsx (a devDependency).
+#              Only `full` consumes this stage.
+#   2. unpack  — extracts the AppImage and keeps the closure, dropping the
+#              Electron shell (the GUI binary, Chromium resources and locales)
+#              and the runtime's pnpm (the image provides it through corepack).
+#   3. runtime — slim Node image; `full` copies the built checkout, `min` copies
+#              the unpacked closure and Python.
 #
-# The web profile serves on port 3080. DSH_HOME (sessions, profiles,
-# credentials) lives in /data — mount a volume there to persist it.
-# The model needs a provider key: pass -e DEEPSEEK_API_KEY=... at run time.
+# Both images serve the web profile on port 3080. The profile refuses wildcard
+# hosts, so the entrypoint binds this container's own address, the interface a
+# published port forwards to; pass a whole command to bind something else.
+# DSH_HOME (sessions, profiles, credentials) lives in /data — mount a volume
+# there to persist it. The model needs a provider key: pass
+# -e DEEPSEEK_API_KEY=... at run time.
 #
-# The dai branch's client/connection links bigtangle-ts from the sibling wallet
-# checkout (`link:../../../../wallet/packages/bigtangle-ts`), which is outside
-# this build context. `./deploy.sh` stages that package (the dir is gitignored;
-# its own deps are installed in-image) and runs the build:
+# `./deploy.sh` stages the dai branch's out-of-context bigtangle-ts link, builds
+# the AppImage when it is absent, and runs the build:
 #   ./deploy.sh [image-tag] [min|full|both]
 #   defaults: ghcr.io/bigt-ai-platform/deepseek-harness:latest, both
 
@@ -60,19 +65,32 @@ RUN pnpm install --frozen-lockfile && pnpm run build
 FROM builder AS builder-full
 RUN rm -rf /app/.git
 
-# `min`: additionally drop source/test fixtures a running `web` profile never
-# reads, and dependency trees that are dev/test-only tooling or providers the
-# `web` composition does not mount. esbuild and typescript stay: `tsx` and the
-# type tooling resolve them at runtime.
-FROM builder AS builder-min
+# `min`: the packaged Linux application, reduced to the closure the `web` profile
+# reads. The Desktop packaging pipeline (see deploy.sh) already packed, pruned
+# and smoke-checked this payload, including the linked bigtangle-ts package.
+FROM node:${NODE_VERSION}-bookworm-slim AS unpack
+ARG APPIMAGE
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY ${APPIMAGE} /tmp/app.AppImage
 RUN set -eux; \
-  rm -rf /app/.git /app/snapshots /app/website /app/benchmarks /app/python; \
-  for p in lefthook playwright @playwright happy-dom vitest @vitest @testing-library \
-           electron-winstaller jscpd publint @oxlint oxlint typescript-language-server \
-           @stylistic @types pnpm tsdown rolldown @rolldown \
-           @openai+codex @anthropic-ai+claude-agent-sdk @trycua+cua-driver; do \
-    rm -rf "/app/node_modules/.pnpm/${p}"* "/app/node_modules/${p}" 2>/dev/null || true; \
-  done
+  chmod +x /tmp/app.AppImage; \
+  cd /tmp; \
+  /tmp/app.AppImage --appimage-extract >/dev/null; \
+  mv /tmp/squashfs-root /opt/app; \
+  rm -f /tmp/app.AppImage; \
+  cd /opt/app; \
+  npx --yes @electron/asar extract resources/app.asar resources/app; \
+  cp -r resources/app.asar.unpacked/dsh/. resources/app/dsh/; \
+  rm -rf resources/app.asar resources/app.asar.unpacked resources/default_app.asar \
+         resources/icon.png resources/apparmor-profile locales \
+         resources/runtime/primary-runtime/dependencies/pnpm; \
+  rm -f deepseek-harness chrome-sandbox chrome_crashpad_handler icudtl.dat \
+        LICENSES.chromium.html LICENSE.electron.txt resources.pak \
+        chrome_100_percent.pak chrome_200_percent.pak v8_context_snapshot.bin \
+        snapshot_blob.bin vk_swiftshader_icd.json libvk_swiftshader.so \
+        libffmpeg.so libvulkan.so.1 libEGL.so libGLESv2.so version
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime-base
 
@@ -89,13 +107,19 @@ RUN apt-get update \
   && corepack enable && corepack prepare pnpm@11.28.5 --activate \
   && mkdir -p /data /wallet/packages && chown node:node /data /wallet/packages
 
+# The web profile rejects wildcard hosts, so the entrypoint binds this
+# container's own address (see dsh-entrypoint.sh).
+COPY --chown=root:root dsh-entrypoint.sh /usr/local/bin/dsh-entrypoint
+RUN chmod 0755 /usr/local/bin/dsh-entrypoint
+
 WORKDIR /app
 USER node
 VOLUME /data
 EXPOSE 3080
 
-ENTRYPOINT ["node", "--import", "tsx/esm", "apps/cli/src/bin.ts"]
-CMD ["web", "--host", "0.0.0.0", "--port", "3080", "--no-open"]
+ENV DSH_ENTRY=/app/apps/cli/src/bin.ts \
+  NODE_OPTIONS=--import\ tsx/esm
+ENTRYPOINT ["/usr/local/bin/dsh-entrypoint"]
 
 # ── full: every shipped profile and provider ────────────────────────────────
 FROM runtime-base AS full
@@ -103,7 +127,12 @@ COPY --from=builder-full --chown=node:node /app /app
 # same out-of-context link as the builder stage
 RUN ln -s /app/bigtangle-ts /wallet/packages/bigtangle-ts
 
-# ── min: web profile only, pruned ───────────────────────────────────────────
+# ── min: the packaged Linux application, headless ───────────────────────────
 FROM runtime-base AS min
-COPY --from=builder-min --chown=node:node /app /app
-RUN ln -s /app/bigtangle-ts /wallet/packages/bigtangle-ts
+COPY --from=unpack --chown=node:node /opt/app/resources/app/dsh /app/dsh
+COPY --from=unpack --chown=node:node /opt/app/resources/runtime/primary-runtime/dependencies/python /app/runtime/python
+# The closure is a complete production dependency tree, so the entrypoint is the
+# packed CLI itself rather than the checkout's TypeScript source entrypoint.
+ENV PATH=/app/runtime/python/bin:${PATH} \
+  DSH_ENTRY=/app/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js \
+  NODE_OPTIONS=

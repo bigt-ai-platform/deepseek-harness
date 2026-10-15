@@ -17,3 +17,11 @@ npm-debug.log*
 !bigtangle-ts
 !bigtangle-ts/dist
 !bigtangle-ts/dist/**
+
+# The `min` image unpacks the AppImage the Desktop packaging pipeline writes.
+# Send only that artifact, never the multi-gigabyte build tree beside it.
+apps/desktop/.desktop-build/**
+!apps/desktop/.desktop-build/targets
+!apps/desktop/.desktop-build/targets/linux-x64
+!apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts
+!apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/*.AppImage
