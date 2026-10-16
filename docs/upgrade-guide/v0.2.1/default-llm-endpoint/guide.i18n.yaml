@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1/default-llm-endpoint/guide.md
+/:
+  en: 393f511e1c31c141
+  zh: b2bfa64236c525ca
+/default-deepseek-endpoint-is-the-llm-bigt-ai-gateway:
+  en: e34983c384e65972
+  zh: 92e48aa031c440fb
+/default-deepseek-endpoint-is-the-llm-bigt-ai-gateway/change:
+  en: 42f6d571b7b5dcaa
+  zh: 4d4879488bfdaf53
+/default-deepseek-endpoint-is-the-llm-bigt-ai-gateway/migration:
+  en: 79a07f7f7a09d353
+  zh: c61b34c889cdba4d
