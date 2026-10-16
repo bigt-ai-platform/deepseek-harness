@@ -46,11 +46,15 @@
 #   --upload                      copy the Linux, Windows and macOS installers to MinIO,
 #                                 then keep only this release's version prefix: older
 #                                 <project>/<version> directories are pruned per site
-#                                 after the copy succeeds
+#                                 after the copy succeeds. Every installer is also
+#                                 aliased under <project>/latest/<name with the version
+#                                 replaced by latest> for the dsh sidebar download table
+#                                 (dai apps/web/src/lib/dsh-downloads.ts)
 #   --minio-bucket <name>         target bucket (default dsh-releases)
 #   --minio-prefix <path>         object prefix (default deepseek-harness/<version>)
-#   --minio-sites eu,us,asia      geo sites to write; the mesh replicates, so one
-#                                 site suffices (default eu; all writes every site)
+#   --minio-sites eu,us,asia      sites to write, resolved to the hosts their public
+#                                 S3 endpoints serve (EU writes the s1002 dispatch
+#                                 shard, not s1001; default eu; all writes every site)
 #   --minio-endpoint <url>        one explicit endpoint; overrides --minio-sites
 #   --minio-env-file <path>       credentials file (default deploy/env/.env.europa,
 #                                 then ~/git/pm/minio/.env.eu); supplies
@@ -424,7 +428,11 @@ if [ "$UPLOAD" = "1" ]; then
 
   endpoint_for_site() {
     case "$1" in
-      eu)   echo "https://minio-s1001.bigt.ai" ;;
+      # EU is a two-shard pair (pm/minio/sites.conf) and the s3.bigt.ai
+      # dispatch hashes this bucket to s1002, so s1002 is the host the public
+      # s3.bigt.ai URLs actually serve from — writing s1001 alone leaves EU
+      # downloads 403 behind the dispatch hop. US/Asia have no dispatch hop.
+      eu)   echo "https://minio-s1002.bigt.ai" ;;
       us)   echo "https://minio-us1001.bigt.ai" ;;
       asia) echo "https://minio-hk1002.bigt.ai" ;;
       *) return 1 ;;
@@ -461,22 +469,35 @@ if [ "$UPLOAD" = "1" ]; then
     echo "==> $MINIO_BUCKET/$MINIO_PREFIX <- $EP"
     docker run --rm \
       -e EP="$EP" -e AK="$AK" -e SK="$SK" -e B="$MINIO_BUCKET" -e P="$MINIO_PREFIX" -e PUB="$MINIO_PUBLIC" \
-      -e RETAIN_ROOT="$RETAIN_ROOT" -e RETAIN_CURRENT="$RETAIN_CURRENT" \
-      -v "$STAGE:/data:ro" --entrypoint sh "$MC_IMAGE" -c '
+      -e VERSION="$VERSION" -e RETAIN_ROOT="$RETAIN_ROOT" -e RETAIN_CURRENT="$RETAIN_CURRENT" \
+      -v "$STAGE:/data:ro" --entrypoint bash "$MC_IMAGE" -c '
         set -e
         mc alias set r "$EP" "$AK" "$SK" >/dev/null
         mc mb --ignore-existing "r/$B" >/dev/null
         mc cp --recursive /data/ "r/$B/$P/" >/dev/null
         if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B/$P" >/dev/null; fi
+        # Stable per-platform aliases for the dsh sidebar download table
+        # (dai apps/web/src/lib/dsh-downloads.ts): <root>/latest/<file with the
+        # version replaced by latest>, so the app links one URL per platform.
+        if [ -n "$RETAIN_ROOT" ]; then
+          mc ls --recursive "r/$B/$P" | while IFS= read -r line; do
+            key="${line##* }"
+            base="${key##*/}"
+            case "$base" in *"$VERSION"*) ;; *) continue ;; esac
+            mc cp "r/$B/$P/$key" "r/$B/$RETAIN_ROOT/latest/${base/"$VERSION"/latest}" >/dev/null
+          done
+          if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B/$RETAIN_ROOT/latest" >/dev/null; fi
+        fi
         # Retention runs only after this release copied successfully, so a failed
-        # upload never destroys the previous version. The mc image carries only
-        # mc and sh, so entries are parsed with shell expansions.
+        # upload never destroys the previous version. The latest/ alias dir is
+        # not a version and is always kept. The mc image carries only mc and
+        # bash/coreutils, so entries are parsed with shell expansions.
         if [ -n "$RETAIN_ROOT" ]; then
           keep="${RETAIN_CURRENT#"$RETAIN_ROOT"/}/"
           mc ls "r/$B/$RETAIN_ROOT/" | while IFS= read -r line; do
             key="${line##* }"
             case "$key" in */) ;; *) continue ;; esac
-            if [ "$key" = "$keep" ]; then continue; fi
+            if [ "$key" = "$keep" ] || [ "$key" = "latest/" ]; then continue; fi
             echo "prune: $RETAIN_ROOT/$key"
             mc rm --recursive --force "r/$B/$RETAIN_ROOT/$key" >/dev/null
           done
