@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, LoggerLevel } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -27,6 +27,12 @@ import { assemble, options, user, sourceModuleLoader } from './helpers.ts'
 
 const IN_HISTORY_MODEL = process.env.DEEPSEEK_IN_HISTORY_MODEL
 const cleanups: (() => Promise<unknown>)[] = []
+beforeEach(() => {
+  // Fork-local: the api-key plugin resolves its default `DEEPSEEK_API_KEY` ref,
+  // which holds a gateway key in this checkout, so these official-endpoint cases
+  // inject theirs before the plugin mounts.
+  if (process.env.DEEPSEEK_OFFICIAL_API_KEY) vi.stubEnv('DEEPSEEK_API_KEY', process.env.DEEPSEEK_OFFICIAL_API_KEY)
+})
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!()
   vi.unstubAllEnvs()
@@ -48,7 +54,14 @@ async function boot(models?: Messages.Options['models']) {
 }
 const tool = { name: 'lookup_value', description: 'Read the requested value. Always call this tool to obtain a value.', parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } }
 
-describe.skipIf(!process.env.DEEPSEEK_API_KEY)('DeepSeek Messages real API', () => {
+/**
+ * Fork-local: every other e2e spec in this checkout uses `DEEPSEEK_API_KEY` for
+ * the gateway its shipped bundle defaults to, so the official endpoint these
+ * cases target prefers its own credential when one is provided.
+ */
+const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY ?? process.env.DEEPSEEK_API_KEY
+
+describe.skipIf(!officialApiKey)('DeepSeek Messages real API', () => {
   it.skipIf(!IN_HISTORY_MODEL).each([false, true])('updates system instructions during a conversation, in-history=%s', async (inHistory) => {
     const model = IN_HISTORY_MODEL as string
     // Each case owns the capability, even for a model with an in-history catalog default.
@@ -77,7 +90,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('DeepSeek Messages real API', () 
     const uploads: string[] = []
     const bodies: string[] = []
     const files = new DeepSeekFilesClient({
-      baseURL: Protocol.PUBLIC_BASE_URL, headers: { 'x-api-key': process.env.DEEPSEEK_API_KEY as string }, fetch: fetchImpl,
+      baseURL: Protocol.PUBLIC_BASE_URL, headers: { 'x-api-key': officialApiKey as string }, fetch: fetchImpl,
     })
     const ownedFiles = new Set<ReturnType<typeof Protocol.DeepSeekFileId>>()
     cleanups.push(async () => {
