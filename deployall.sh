@@ -43,7 +43,10 @@
 #   --watch                       follow the packaging run(s) to completion
 #
 # Upload options (step 5):
-#   --upload                      copy the Linux, Windows and macOS installers to MinIO
+#   --upload                      copy the Linux, Windows and macOS installers to MinIO,
+#                                 then keep only this release's version prefix: older
+#                                 <project>/<version> directories are pruned per site
+#                                 after the copy succeeds
 #   --minio-bucket <name>         target bucket (default dsh-releases)
 #   --minio-prefix <path>         object prefix (default deepseek-harness/<version>)
 #   --minio-sites eu,us,asia      geo sites to write; the mesh replicates, so one
@@ -435,6 +438,20 @@ if [ "$UPLOAD" = "1" ]; then
     SITES="$(echo "$MINIO_SITES" | tr ',' ' ')"
   fi
 
+  # Retention keeps only this release under <project>/<version>. A bare project
+  # root, a deeper custom prefix, or a trailing slash has no sibling version
+  # directories to compare against, so it is never pruned.
+  RETAIN_ROOT=""
+  RETAIN_CURRENT=""
+  case "$MINIO_PREFIX" in
+    */|*/*/*) : ;;
+    */*) RETAIN_ROOT="${MINIO_PREFIX%%/*}"; RETAIN_CURRENT="$MINIO_PREFIX" ;;
+    *) : ;;
+  esac
+  if [ -z "$RETAIN_ROOT" ]; then
+    info "prefix $MINIO_PREFIX is not <project>/<version>; skipping the latest-version retention"
+  fi
+
   for site in $SITES; do
     if [ "$site" = "custom" ]; then
       EP="$MINIO_ENDPOINT"
@@ -444,12 +461,26 @@ if [ "$UPLOAD" = "1" ]; then
     echo "==> $MINIO_BUCKET/$MINIO_PREFIX <- $EP"
     docker run --rm \
       -e EP="$EP" -e AK="$AK" -e SK="$SK" -e B="$MINIO_BUCKET" -e P="$MINIO_PREFIX" -e PUB="$MINIO_PUBLIC" \
+      -e RETAIN_ROOT="$RETAIN_ROOT" -e RETAIN_CURRENT="$RETAIN_CURRENT" \
       -v "$STAGE:/data:ro" --entrypoint sh "$MC_IMAGE" -c '
         set -e
         mc alias set r "$EP" "$AK" "$SK" >/dev/null
         mc mb --ignore-existing "r/$B" >/dev/null
         mc cp --recursive /data/ "r/$B/$P/" >/dev/null
         if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B/$P" >/dev/null; fi
+        # Retention runs only after this release copied successfully, so a failed
+        # upload never destroys the previous version. The mc image carries only
+        # mc and sh, so entries are parsed with shell expansions.
+        if [ -n "$RETAIN_ROOT" ]; then
+          keep="${RETAIN_CURRENT#"$RETAIN_ROOT"/}/"
+          mc ls "r/$B/$RETAIN_ROOT/" | while IFS= read -r line; do
+            key="${line##* }"
+            case "$key" in */) ;; *) continue ;; esac
+            if [ "$key" = "$keep" ]; then continue; fi
+            echo "prune: $RETAIN_ROOT/$key"
+            mc rm --recursive --force "r/$B/$RETAIN_ROOT/$key" >/dev/null
+          done
+        fi
         mc ls --recursive "r/$B/$P/"
       '
   done
