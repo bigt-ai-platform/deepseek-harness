@@ -59,7 +59,7 @@ const tool = { name: 'lookup_value', description: 'Read the requested value. Alw
  * the gateway its shipped bundle defaults to, so the official endpoint these
  * cases target prefers its own credential when one is provided.
  */
-const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY ?? process.env.DEEPSEEK_API_KEY
+const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY || process.env.DEEPSEEK_API_KEY
 
 describe.skipIf(!officialApiKey)('DeepSeek Messages real API', () => {
   it.skipIf(!IN_HISTORY_MODEL).each([false, true])('updates system instructions during a conversation, in-history=%s', async (inHistory) => {

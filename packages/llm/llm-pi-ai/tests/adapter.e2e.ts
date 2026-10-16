@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createToolResultMessage, createUserMessage, ToolCallId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Message, ToolSchema } from '@deepseek-ai/dsh-llm'
@@ -16,6 +16,13 @@ import { assemble, type AssembledResult } from './assemble.ts'
 const FLASH = 'deepseek-flash'
 const contexts: Context[] = []
 
+/**
+ * Fork-local: every other e2e spec in this checkout uses `DEEPSEEK_API_KEY` for
+ * the gateway its shipped bundle defaults to, so this official-endpoint route
+ * prefers its own credential when one is provided.
+ */
+const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY || process.env.DEEPSEEK_API_KEY
+
 async function harness(_model: string, config: Partial<PiAiProviderProfile> = {}) {
   const ctx = new Context()
   contexts.push(ctx)
@@ -23,7 +30,7 @@ async function harness(_model: string, config: Partial<PiAiProviderProfile> = {}
   await ctx.plugin(LlmPiAi, {
     providers: {
       deepseek: {
-        ...process.env.DEEPSEEK_API_KEY === undefined ? {} : { apiKey: process.env.DEEPSEEK_API_KEY },
+        ...officialApiKey === undefined ? {} : { apiKey: officialApiKey },
         ...config,
       },
     },
@@ -33,6 +40,14 @@ async function harness(_model: string, config: Partial<PiAiProviderProfile> = {}
 
 afterEach(async () => {
   await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
+  vi.unstubAllEnvs()
+})
+
+beforeEach(() => {
+  // Fork-local: this route resolves its credential through `apiKeyEnv` from the
+  // launch environment, which carries a gateway key in this checkout, so these
+  // official-endpoint cases inject theirs.
+  if (process.env.DEEPSEEK_OFFICIAL_API_KEY) vi.stubEnv('DEEPSEEK_API_KEY', process.env.DEEPSEEK_OFFICIAL_API_KEY)
 })
 
 function ask(text: string): Message[] {
@@ -63,7 +78,7 @@ const weatherTool: ToolSchema = {
   },
 }
 
-describe.skipIf(!process.env.DEEPSEEK_API_KEY)('llm-pi-ai e2e (real API)', () => {
+describe.skipIf(!officialApiKey)('llm-pi-ai e2e (real API)', () => {
   it(`${FLASH} + provider-default reasoning: plain text generation`, async () => {
     const ctx = await harness(FLASH)
     const result = await assemble(ctx,{

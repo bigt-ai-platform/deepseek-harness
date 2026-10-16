@@ -48,7 +48,7 @@ const IN_HISTORY_MODEL = process.env.DEEPSEEK_IN_HISTORY_MODEL
  * the gateway its shipped bundle defaults to, so the official endpoint these
  * cases target prefers its own credential when one is provided.
  */
-const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY ?? process.env.DEEPSEEK_API_KEY
+const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY || process.env.DEEPSEEK_API_KEY
 const TEST_PNG = Uint8Array.from(readFileSync(
   new URL('../../llm-pi-ai/tests/fixtures/qr-code.png', import.meta.url),
 ))
