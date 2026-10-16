@@ -31,13 +31,14 @@
 #   --deploy-version <x.y.z>      DSH_VERSION for deploy.sh; default: deploy.sh derives it
 #   --desktop release|fork        release: the two signed self-hosted workflows;
 #                                 fork: desktop-fork-package.yml on GitHub-hosted
-#                                 runners (unsigned win-x64 + mac-arm64). The two
-#                                 production workflows need the registered runners
+#                                 runners (unsigned win-x64, mac-arm64, mac-x64
+#                                 and linux-x64). The two production workflows
+#                                 need the registered runners
 #                                 dsh-win-package-trial / dsh-mac-package-trial
 #   --update-origin <https>       win-x64 mandatory-update policy origin; required
 #                                 with --desktop fork
 #   --fork-targets <choice>       fork workflow targets (default
-#                                 win-x64,mac-arm64,linux-x64)
+#                                 win-x64,mac-arm64,mac-x64,linux-x64)
 #   --no-bump / --no-deploy / --no-desktop / --no-push
 #   --watch                       follow the packaging run(s) to completion
 #
@@ -98,7 +99,7 @@ MACOS_RUN=""
 DESKTOP_MODE="release"
 UPDATE_ORIGIN=""
 FORK_RUN=""
-FORK_TARGETS="win-x64,mac-arm64,linux-x64"
+FORK_TARGETS="win-x64,mac-arm64,mac-x64,linux-x64"
 GH_REPO=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'

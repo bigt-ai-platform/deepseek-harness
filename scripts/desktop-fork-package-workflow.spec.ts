@@ -37,3 +37,16 @@ it('provides the settings before the installer build runs', () => {
   expect(settings).toBeLessThan(win.steps.indexOf(build))
   expect(win.steps.some(step => step.run?.includes('apps/desktop/.env.windows'))).toBe(true)
 })
+
+it('builds an installer for every platform target by default', () => {
+  expect(workflow.on.workflow_dispatch!.inputs.targets!.default).toBe('win-x64,mac-arm64,mac-x64,linux-x64')
+  expect(Object.keys(workflow.jobs).sort()).toEqual(['linux-x64', 'mac-arm64', 'mac-x64', 'win-x64'])
+  const packageScripts: Record<string, string> = {
+    'mac-arm64': 'package:mac:arm64:unsigned',
+    'mac-x64': 'package:mac:x64:unsigned',
+    'linux-x64': 'package:linux:x64:unsigned',
+  }
+  for (const [target, script] of Object.entries(packageScripts)) {
+    expect(workflow.jobs[target]!.steps.some(step => step.run?.includes(script))).toBe(true)
+  }
+})

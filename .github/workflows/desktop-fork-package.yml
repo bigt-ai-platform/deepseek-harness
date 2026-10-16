@@ -21,13 +21,13 @@ on:
         description: 'Comma-separated Desktop targets to build'
         type: choice
         options:
+          - win-x64,mac-arm64,mac-x64,linux-x64
           - win-x64,mac-arm64,linux-x64
           - win-x64
           - mac-arm64
           - mac-x64
           - linux-x64
-          - win-x64,mac-arm64,mac-x64,linux-x64
-        default: win-x64,mac-arm64,linux-x64
+        default: win-x64,mac-arm64,mac-x64,linux-x64
         required: true
       update_origin:
         description: 'win-x64 only: DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN, an absolute https origin'
