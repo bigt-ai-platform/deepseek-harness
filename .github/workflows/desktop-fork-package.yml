@@ -5,11 +5,14 @@ name: Package Desktop (fork) · unsigned installers
 # windows-package.yml / macos-package.yml target.
 #
 # Unsigned output lands in
-# apps/desktop/.desktop-build/targets/<target>/unsigned-artifacts/. A Windows
-# build embeds the mandatory-update policy, and hosted runners own no machine
-# configuration, so the win-x64 job writes apps/desktop/.env.windows from the
-# `update_origin` input (production deployment, anonymous policy); unsigned
-# macOS and Linux builds skip that policy. Targets are host-gated — mac-arm64
+# apps/desktop/.desktop-build/targets/<target>/unsigned-artifacts/, and each
+# job uploads only the installer file from it — the unpacked build trees and
+# builder-debug.yml stay on the runner, so the artifact is the ~300 MB
+# installer instead of a ~2 GB build tree. A Windows build embeds the
+# mandatory-update policy, and hosted runners own no machine configuration, so
+# the win-x64 job writes apps/desktop/.env.windows from the `update_origin`
+# input (production deployment, anonymous policy); unsigned macOS and Linux
+# builds skip that policy. Targets are host-gated — mac-arm64
 # needs an Apple Silicon runner, mac-x64 an Intel one, and linux-x64 a Linux x64
 # one — so each target is its own job (mac-x64 falls back to `macos-13` where
 # `macos-15-intel` is unavailable).
@@ -89,7 +92,7 @@ jobs:
         with:
           name: desktop-win-x64-unsigned
           if-no-files-found: error
-          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/**
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
 
   mac-arm64:
     if: contains(inputs.targets, 'mac-arm64')
@@ -113,7 +116,7 @@ jobs:
         with:
           name: desktop-mac-arm64-unsigned
           if-no-files-found: error
-          path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/**
+          path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
 
   linux-x64:
     if: contains(inputs.targets, 'linux-x64')
@@ -138,7 +141,7 @@ jobs:
         with:
           name: desktop-linux-x64-unsigned
           if-no-files-found: error
-          path: apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/**
+          path: apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/*.AppImage
 
   mac-x64:
     if: contains(inputs.targets, 'mac-x64')
@@ -162,4 +165,4 @@ jobs:
         with:
           name: desktop-mac-x64-unsigned
           if-no-files-found: error
-          path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/**
+          path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg

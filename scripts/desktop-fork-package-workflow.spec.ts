@@ -8,7 +8,7 @@ const workflow = yaml.load(readFileSync(resolve(root, '.github/workflows/desktop
   on: Record<string, { inputs: Record<string, { description?: string; default?: string }> }>
   jobs: Record<string, {
     env?: Record<string, string>
-    steps: Array<{ name?: string; uses?: string; run?: string; env?: Record<string, string> }>
+    steps: Array<{ name?: string; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> }>
   }>
 }
 const win = workflow.jobs['win-x64']!
@@ -36,6 +36,22 @@ it('provides the settings before the installer build runs', () => {
   expect(settings).toBeGreaterThan(-1)
   expect(settings).toBeLessThan(win.steps.indexOf(build))
   expect(win.steps.some(step => step.run?.includes('apps/desktop/.env.windows'))).toBe(true)
+})
+
+it('uploads only the installer file, never the unpacked build tree', () => {
+  // A `/**` path would publish ~2 GB per target (win-unpacked/, mac/, linux-unpacked/, builder-debug.yml).
+  const installerGlobs: Record<string, string> = {
+    'win-x64': 'apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe',
+    'mac-arm64': 'apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg',
+    'mac-x64': 'apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg',
+    'linux-x64': 'apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/*.AppImage',
+  }
+  for (const [target, path] of Object.entries(installerGlobs)) {
+    const upload = workflow.jobs[target]!.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))!
+    expect(upload).toBeDefined()
+    expect(upload.with!['if-no-files-found']).toBe('error')
+    expect(upload.with!.path).toBe(path)
+  }
 })
 
 it('builds an installer for every platform target by default', () => {
