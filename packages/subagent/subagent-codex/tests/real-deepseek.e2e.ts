@@ -34,6 +34,13 @@ const codexPackage = JSON.parse(readFileSync(
 )) as { version: string; bin: { codex: string } }
 const codexEntry = resolve(dirname(codexPackageJson), codexPackage.bin.codex)
 
+/**
+ * Fork-local: every other e2e spec in this checkout uses `DEEPSEEK_API_KEY` for
+ * the gateway its shipped bundle defaults to, so this bridge, which fronts the
+ * official DeepSeek endpoint, prefers its own credential when one is provided.
+ */
+const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY || process.env.DEEPSEEK_API_KEY
+
 const roots: string[] = []
 const contexts: Context[] = []
 const bridges: DeepSeekResponsesBridge[] = []
@@ -52,12 +59,12 @@ async function expectQuiescent(handles: readonly SubprocessHandle[]): Promise<vo
   }
 }
 
-describe.skipIf(!process.env.DEEPSEEK_API_KEY)(
+describe.skipIf(!officialApiKey)(
   'Codex provider with real DeepSeek API',
   () => {
     it('returns one unique nonce through the production provider and real Codex', async () => {
-      const apiKey = process.env.DEEPSEEK_API_KEY
-      if (apiKey === undefined) throw new Error('e2e ran without DEEPSEEK_API_KEY')
+      const apiKey = officialApiKey
+      if (apiKey === undefined) throw new Error('e2e ran without DEEPSEEK_OFFICIAL_API_KEY or DEEPSEEK_API_KEY')
       const root = mkdtempSync(join(tmpdir(), 'dsh-codex-deepseek-e2e-'))
       roots.push(root)
       const workspace = join(root, 'workspace')

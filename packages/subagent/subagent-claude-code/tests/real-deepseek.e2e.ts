@@ -24,6 +24,12 @@ import * as claudeCode from '../src/index.ts'
 const execFileAsync = promisify(execFile)
 const OFFICIAL_DEEPSEEK_MESSAGES_BASE_URL = 'https://api.deepseek.com/anthropic'
 const DEEPSEEK_MODEL = 'deepseek-v4-flash'
+/**
+ * Fork-local: every other e2e spec in this checkout uses `DEEPSEEK_API_KEY` for
+ * the gateway its shipped bundle defaults to, so the official endpoint this
+ * suite targets prefers its own credential when one is provided.
+ */
+const officialApiKey = process.env.DEEPSEEK_OFFICIAL_API_KEY || process.env.DEEPSEEK_API_KEY
 const sdkRoot = dirname(fileURLToPath(
   import.meta.resolve('@anthropic-ai/claude-agent-sdk'),
 ))
@@ -58,12 +64,12 @@ async function expectQuiescent(handles: readonly SubprocessHandle[]): Promise<vo
   }
 }
 
-describe.skipIf(!process.env.DEEPSEEK_API_KEY)(
+describe.skipIf(!officialApiKey)(
   'Claude Code provider with real DeepSeek API',
   () => {
     it('returns one unique nonce through the production provider and real SDK/CLI', async () => {
-      const apiKey = process.env.DEEPSEEK_API_KEY
-      if (apiKey === undefined) throw new Error('e2e ran without DEEPSEEK_API_KEY')
+      const apiKey = officialApiKey
+      if (apiKey === undefined) throw new Error('e2e ran without DEEPSEEK_OFFICIAL_API_KEY or DEEPSEEK_API_KEY')
       const root = mkdtempSync(join(tmpdir(), 'dsh-claude-deepseek-e2e-'))
       roots.push(root)
       const workspace = join(root, 'workspace')
