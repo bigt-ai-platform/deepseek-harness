@@ -6,7 +6,9 @@ name: Package Desktop (fork) · unsigned installers
 #
 # Unsigned output lands in
 # apps/desktop/.desktop-build/targets/<target>/unsigned-artifacts/. A Windows
-# build must embed the mandatory-update origin (input `update_origin`); unsigned
+# build embeds the mandatory-update policy, and hosted runners own no machine
+# configuration, so the win-x64 job writes apps/desktop/.env.windows from the
+# `update_origin` input (production deployment, anonymous policy); unsigned
 # macOS and Linux builds skip that policy. Targets are host-gated — mac-arm64
 # needs an Apple Silicon runner, mac-x64 an Intel one, and linux-x64 a Linux x64
 # one — so each target is its own job (mac-x64 falls back to `macos-13` where
@@ -28,7 +30,7 @@ on:
         default: win-x64,mac-arm64,linux-x64
         required: true
       update_origin:
-        description: 'win-x64 only: DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN, an absolute https origin'
+        description: 'win-x64 only: DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN, an absolute https origin'
         type: string
         default: ''
         required: false
@@ -54,7 +56,6 @@ jobs:
         shell: pwsh
     env:
       DSH_DESKTOP_UPDATE_CHANNEL: nightly
-      DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: ${{ inputs.update_origin }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -68,6 +69,17 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           exit $LASTEXITCODE
+      - name: Write unsigned packaging settings
+        env:
+          UPDATE_ORIGIN: ${{ inputs.update_origin }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:UPDATE_ORIGIN)) { throw 'update_origin is required for the win-x64 build' }
+          @(
+            '# Written by desktop-fork-package.yml; hosted runners own no packaging configuration.'
+            'DSH_DESKTOP_APP_ID=com.deepseek.harness'
+            'DSH_DESKTOP_AUTO_UPDATE_ENV=production'
+            "DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=$($env:UPDATE_ORIGIN.Trim())"
+          ) | Set-Content -LiteralPath 'apps/desktop/.env.windows' -Encoding utf8
       - name: Build the unsigned Windows installer
         run: |
           pnpm --dir apps/desktop run package:win:x64:unsigned
