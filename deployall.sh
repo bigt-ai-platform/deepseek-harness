@@ -14,7 +14,7 @@
 #   ./deployall.sh 0.2.2
 #   ./deployall.sh patch --preset test --windows-signing unsigned
 #   ./deployall.sh 0.2.2 --channel latest --watch
-#   ./deployall.sh 0.2.2 --upload --minio-bucket dsh-releases --minio-public
+#   ./deployall.sh 0.2.2 --upload --minio-bucket apps --minio-public
 #
 # Options:
 #   --preset production|test      machine preset for both packaging workflows
@@ -50,8 +50,8 @@
 #                                 aliased under <project>/latest/<name with the version
 #                                 replaced by latest> for the dsh sidebar download table
 #                                 (dai apps/web/src/lib/dsh-downloads.ts)
-#   --minio-bucket <name>         target bucket (default dsh-releases)
-#   --minio-prefix <path>         object prefix (default deepseek-harness/<version>)
+#   --minio-bucket <name>         target bucket (default apps)
+#   --minio-prefix <path>         object prefix (default deepseek-harness/apk/<version>)
 #   --minio-sites eu,us,asia      sites to write, resolved to the hosts their public
 #                                 S3 endpoints serve (EU writes the s1002 dispatch
 #                                 shard, not s1001; default eu; all writes every site)
@@ -94,7 +94,7 @@ DO_PUSH=1
 WATCH=0
 REQUEST=""
 UPLOAD=0
-MINIO_BUCKET="dsh-releases"
+MINIO_BUCKET="apps"
 MINIO_PREFIX=""
 MINIO_SITES="eu"
 MINIO_ENDPOINT=""
@@ -382,7 +382,7 @@ if [ "$UPLOAD" = "1" ]; then
   command -v docker >/dev/null 2>&1 || fail "docker is required for the MinIO upload"
   docker info >/dev/null 2>&1 || fail "the docker daemon is not reachable"
 
-  [ -n "$MINIO_PREFIX" ] || MINIO_PREFIX="deepseek-harness/$VERSION"
+  [ -n "$MINIO_PREFIX" ] || MINIO_PREFIX="deepseek-harness/apk/$VERSION"
   cred() { grep -m1 "^$1=" "$MINIO_ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "\"' " || true; }
   if [ -z "$MINIO_ENV_FILE" ]; then
     for candidate in deploy/env/.env.europa "$HOME/git/pm/minio/.env.eu"; do
@@ -446,13 +446,16 @@ if [ "$UPLOAD" = "1" ]; then
     SITES="$(echo "$MINIO_SITES" | tr ',' ' ')"
   fi
 
-  # Retention keeps only this release under <project>/<version>. A bare project
-  # root, a deeper custom prefix, or a trailing slash has no sibling version
-  # directories to compare against, so it is never pruned.
+  # Retention keeps only this release under <root>/<version>. A bare root, a
+  # deeper custom prefix, or a trailing slash has no sibling version directories
+  # to compare against, so it is never pruned. `<repo>/apk/<version>` (the
+  # default) keeps `<repo>/apk` as the root so the `latest` alias lands beside
+  # the versions, not above them.
   RETAIN_ROOT=""
   RETAIN_CURRENT=""
   case "$MINIO_PREFIX" in
-    */|*/*/*) : ;;
+    */) : ;;
+    */*/*) RETAIN_ROOT="${MINIO_PREFIX%/*}"; RETAIN_CURRENT="$MINIO_PREFIX" ;;
     */*) RETAIN_ROOT="${MINIO_PREFIX%%/*}"; RETAIN_CURRENT="$MINIO_PREFIX" ;;
     *) : ;;
   esac
