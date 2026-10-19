@@ -428,12 +428,12 @@ if [ "$UPLOAD" = "1" ]; then
 
   endpoint_for_site() {
     case "$1" in
-      # EU is one pool behind s1001 (Caddy fronts s1001 + s2001) and the
-      # s3.bigt.ai dispatch now points at that pool host (retargeted 2026-10-19),
-      # so write s1001 like the other publishers. US/Asia serve directly.
-      eu)   echo "https://minio-s1001.bigt.ai" ;;
-      us)   echo "https://minio-us1001.bigt.ai" ;;
-      asia) echo "https://minio-hk1002.bigt.ai" ;;
+      # EU is one pool behind s1001 (Caddy fronts s1001 + s2001); s3.bigt.ai
+      # is a transparent Host-preserving proxy (since 2026-10-19), so all
+      # publishers use the region's s3-* name.
+      eu)   echo "https://s3.bigt.ai" ;;
+      us)   echo "https://s3-us.bigt.ai" ;;
+      asia) echo "https://s3-asia.bigt.ai" ;;
       *) return 1 ;;
     esac
   }
