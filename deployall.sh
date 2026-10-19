@@ -428,13 +428,10 @@ if [ "$UPLOAD" = "1" ]; then
 
   endpoint_for_site() {
     case "$1" in
-      # EU is a two-shard pair (pm/minio/sites.conf) and the s3.bigt.ai
-      # dispatch hashes this bucket to s1002, so s1002 is the host the public
-      # s3.bigt.ai URLs actually serve from — writing s1001 alone leaves EU
-      # downloads 403 behind the dispatch hop. US/Asia have no dispatch hop.
-      # Keep s1002 until the dispatch is retargeted (pm/minio/design.md §8.4);
-      # switch to s1001 together with it, like the other app publishers.
-      eu)   echo "https://minio-s1002.bigt.ai" ;;
+      # EU is one pool behind s1001 (Caddy fronts s1001 + s2001) and the
+      # s3.bigt.ai dispatch now points at that pool host (retargeted 2026-10-19),
+      # so write s1001 like the other publishers. US/Asia serve directly.
+      eu)   echo "https://minio-s1001.bigt.ai" ;;
       us)   echo "https://minio-us1001.bigt.ai" ;;
       asia) echo "https://minio-hk1002.bigt.ai" ;;
       *) return 1 ;;
