@@ -60,7 +60,7 @@
 #                                 then ~/git/pm/minio/.env.eu); supplies
 #                                 S3_ACCESS_KEY/S3_SECRET_KEY or
 #                                 MINIO_ROOT_USER/MINIO_ROOT_PASSWORD
-#   --minio-public                set anonymous download on the uploaded prefix
+#   --minio-public                set bucket-wide anonymous download (fleet policy)
 #   --linux-artifact <path>       AppImage to publish (default: newest under
 #                                 apps/desktop/.desktop-build/.../linux-x64/unsigned-artifacts)
 #   --windows-run <id>            reuse an existing packaging run instead of the newest
@@ -432,6 +432,8 @@ if [ "$UPLOAD" = "1" ]; then
       # dispatch hashes this bucket to s1002, so s1002 is the host the public
       # s3.bigt.ai URLs actually serve from — writing s1001 alone leaves EU
       # downloads 403 behind the dispatch hop. US/Asia have no dispatch hop.
+      # Keep s1002 until the dispatch is retargeted (pm/minio/design.md §8.4);
+      # switch to s1001 together with it, like the other app publishers.
       eu)   echo "https://minio-s1002.bigt.ai" ;;
       us)   echo "https://minio-us1001.bigt.ai" ;;
       asia) echo "https://minio-hk1002.bigt.ai" ;;
@@ -478,7 +480,7 @@ if [ "$UPLOAD" = "1" ]; then
         mc alias set r "$EP" "$AK" "$SK" >/dev/null
         mc mb --ignore-existing "r/$B" >/dev/null
         mc cp --recursive /data/ "r/$B/$P/" >/dev/null
-        if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B/$P" >/dev/null; fi
+        if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B" >/dev/null; fi
         # Stable per-platform aliases for the dsh sidebar download table
         # (dai apps/web/src/lib/dsh-downloads.ts): <root>/latest/<file with the
         # version replaced by latest>, so the app links one URL per platform.
@@ -489,7 +491,7 @@ if [ "$UPLOAD" = "1" ]; then
             case "$base" in *"$VERSION"*) ;; *) continue ;; esac
             mc cp "r/$B/$P/$key" "r/$B/$RETAIN_ROOT/latest/${base/"$VERSION"/latest}" >/dev/null
           done
-          if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B/$RETAIN_ROOT/latest" >/dev/null; fi
+          if [ "$PUB" = "1" ]; then mc anonymous set download "r/$B" >/dev/null; fi
         fi
         # Retention runs only after this release copied successfully, so a failed
         # upload never destroys the previous version. The latest/ alias dir is
