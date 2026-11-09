@@ -23,7 +23,9 @@
 #   · a stable version advances its patch — `0.2.1` -> `0.2.2`
 # The git tag is created after the images build and push. Override the version
 # with DSH_VERSION=<x.y.z>; skip the registry push with DSH_NO_PUSH=1; skip the
-# git tag with DSH_NO_TAG=1.
+# git tag with DSH_NO_TAG=1. Local tags are pruned to :latest / :latest-full
+# after the build (KEEP_LOCAL_VERSIONS=1 keeps the versioned tags;
+# PRUNE_DANGLING_IMAGES=1 also removes untagged layers).
 #
 #   ./deploy.sh [image-repo] [min|full|both]
 #     image-repo  registry/namespace/repo without a tag; a trailing ":tag" is
@@ -178,11 +180,12 @@ build() { # target suffix
 }
 
 case "$VARIANT" in
-  min) build min "" ;;
-  full) build full "-full" ;;
+  min) build min ""; BUILT_SUFFIXES=("") ;;
+  full) build full "-full"; BUILT_SUFFIXES=("-full") ;;
   both)
     build min ""
     build full "-full"
+    BUILT_SUFFIXES=("" "-full")
     ;;
 esac
 
@@ -200,4 +203,23 @@ if [ "${DSH_NO_TAG:-0}" != "1" ]; then
   else
     git push origin "$GIT_TAG"
   fi
+fi
+
+# ── Keep only :latest / :latest-full locally ───────────────────────────────
+# Each variant is tagged :v<version><suffix> and :latest<suffix>; the versioned
+# tags stay behind (~1 GB min, ~3 GB full per release). Pushed tags live in the
+# registry, so drop the local copies. With DSH_NO_PUSH=1 the built tags are the
+# only artifacts and are kept. KEEP_LOCAL_VERSIONS=1 opts out;
+# PRUNE_DANGLING_IMAGES=1 also removes untagged layers.
+if [ "${KEEP_LOCAL_VERSIONS:-0}" != "1" ]; then
+  echo "==> pruning local image tags (keep :latest / :latest-full)"
+  KEEP="latest,latest-full"
+  if [ "${DSH_NO_PUSH:-0}" = "1" ]; then
+    for suffix in "${BUILT_SUFFIXES[@]}"; do KEEP="$KEEP,v$VERSION$suffix"; done
+  fi
+  KEEP_ARGS=()
+  [ "${PRUNE_DANGLING_IMAGES:-0}" = "1" ] && KEEP_ARGS+=(--prune)
+  KEEP_TAGS="$KEEP" ./scripts/docker-keep-latest.sh \
+    ${KEEP_ARGS[@]+"${KEEP_ARGS[@]}"} "${IMAGE_REPO##*/}" \
+    || echo "warning: local image cleanup failed (non-fatal)"
 fi
